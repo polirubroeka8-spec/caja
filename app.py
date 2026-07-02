@@ -29,70 +29,92 @@ st.title("⚡ Monitor de Transferencias por Alias / CVU")
 hora_actual = time.strftime("%H:%M:%S")
 st.caption(f"🔄 Modo ráfaga activo • Buscando transferencias cada 2 segundos... [Último control: {hora_actual}]")
 
-def consultar_transferencias_alias():
-    # Buscador de movimientos de cuenta (lee transferencias directas de CBU/Alias)
+def consultar_todos_los_ingresos():
     url = "https://mercadopago.com"
     headers = {"Authorization": f"Bearer {TOKEN_MP}"}
-    params = {"limit": 20}
+    
+    # Traemos los últimos 30 movimientos mezclando transferencias y cobros comerciales
+    params = {
+        "sort": "date_created",
+        "criteria": "desc",
+        "limit": 30
+    }
     
     try:
         res = requests.get(url, headers=headers, params=params, timeout=2.0)
         if res.status_code == 200:
             datos = res.json().get("results", [])
-            lista_transferencias = []
+            lista_final = []
             
-            for mov in datos:
-                # Solo tomamos dinero que ENTRA ('inflow')
-                if mov.get("direction") == "inflow":
-                    monto = float(mov.get("amount", 0))
-                    tipo = mov.get("type", "")
-                    
-                    f = mov.get("date_created", "")
+            for pago in datos:
+                estado = pago.get("status", "")
+                tipo_operacion = pago.get("operation_type", "")
+                
+                # Filtramos únicamente los ingresos que estén aprobados (dinero real en tu cuenta)
+                if estado == "approved":
+                    f = pago.get("date_created", "")
                     hora = f[11:16] if f else "--:--"
                     
-                    detalle = mov.get("detail", "Ingreso de dinero")
-                    if "bank_transfer" in tipo or "transfer" in tipo:
-                        detalle = "Transferencia por Alias / CVU"
-                    elif "mp_transfer" in tipo:
-                        detalle = "Envío desde otra cuenta MP"
+                    monto = float(pago.get("transaction_amount", 0))
+                    medio = pago.get("payment_method_id", "Otros").upper()
                     
-                    lista_transferencias.append({
+                    # Identificamos el origen real de la transferencia por Alias o banco externo
+                    detalle = pago.get("description")
+                    if not detalle:
+                        tarjeta_nombre = pago.get("card", {}).get("cardholder", {}).get("name")
+                        if tarjeta_nombre:
+                            detalle = tarjeta_nombre
+                        elif "bank_transfer" in tipo_operacion or medio == "BANK_TRANSFER":
+                            detalle = "Transferencia Bancaria (Alias/CBU)"
+                        elif medio == "ACCOUNT_MONEY":
+                            detalle = "Transferencia desde otra cuenta MP"
+                        else:
+                            detalle = "Ingreso de Dinero"
+                    
+                    lista_final.append({
                         "Hora": hora,
                         "Monto Recibido ($)": monto,
                         "Origen / Tipo": detalle,
-                        "ID Operación": str(mov.get("id"))
+                        "Medio": medio,
+                        "ID Operación": str(pago.get("id"))
                     })
-            return pd.DataFrame(lista_transferencias)
+            return pd.DataFrame(lista_final)
         return pd.DataFrame()
     except:
         return pd.DataFrame()
 
-tabla_viva = consultar_transferencias_alias()
+tabla_viva = consultar_todos_los_ingresos()
 
-if tabla_viva is not None and not tabla_viva.empty:
-    df_aprobados = tabla_viva.copy()
-    total_acumulado = df_aprobados["Monto Recibido ($)"].sum()
-    
-    col1, col2 = st.columns(2)
-    ultima = df_aprobados.iloc[0] # El movimiento más nuevo arriba de todo
-    
-    with col1:
-        st.metric(
-            label="🚨 ÚLTIMA TRANSFERENCIA DETECTADA", 
-            value=f"${ultima['Monto Recibido ($)']:,.2f}", 
-            delta=f"{ultima['Hora']} - {ultima['Origen / Tipo']}"
-        )
-    with col2:
-        st.metric(
-            label="💰 TOTAL RECIBIDO RECIENTE", 
-            value=f"${total_acumulado:,.2f}"
-        )
+# Si la tabla viene vacía, armamos estructura limpia
+if tabla_viva.empty:
+    tabla_viva = pd.DataFrame(columns=["Hora", "Monto Recibido ($)", "Origen / Tipo", "Medio", "ID Operación"])
 
-    st.markdown("---")
-    st.subheader("📋 Registro de Transferencias Recientes")
-    st.dataframe(df_aprobados, use_container_width=True, height=400)
+# PANEL SUPERIOR (Métricas gigantes)
+col1, col2 = st.columns(2)
+
+if not tabla_viva.empty:
+    df_filtrado = tabla_viva.copy()
+    ultima = df_filtrado.iloc[0] # El movimiento más nuevo arriba de todo
+    monto_ult = f"${ultima['Monto Recibido ($)']:,.2f}"
+    det_ult = f"{ultima['Hora']} - {ultima['Origen / Tipo']}"
+    total_acumulado = df_filtrado["Monto Recibido ($)"].sum()
 else:
-    st.info("No se registran transferencias recientes. El monitor está activo esperando ingresos por Alias...")
+    monto_ult = "$0.00"
+    det_ult = "Esperando transferencia por Alias..."
+    total_acumulado = 0.0
+
+with col1:
+    st.metric(label="🚨 ÚLTIMA TRANSFERENCIA DETECTADA", value=monto_ult, delta=det_ult)
+with col2:
+    st.metric(label="💰 TOTAL RECIBIDO RECIENTE", value=f"${total_acumulado:,.2f}")
+
+st.markdown("---")
+st.subheader("📋 Registro de Transferencias Recientes")
+
+if not tabla_viva.empty:
+    st.dataframe(tabla_viva, use_container_width=True, height=400)
+else:
+    st.info("No se registran ingresos recientes en el historial. El monitor está activo esperando transferencias por Alias...")
 
 # Bucle automático de ráfaga de 2 segundos
 time.sleep(2)
