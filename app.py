@@ -3,13 +3,17 @@ import requests
 import pandas as pd
 import time
 
-# CREDENCIALES FIJAS Y SEGURAS
+# CREDENCIALES
 TOKEN_MP = "APP_USR-2109822195706525-070122-23e9a6051330a533196e8de5669d6782-188405054"
 CLAVE_ACCESO = "polirubroeka1y2"
 
 st.set_page_config(page_title="Monitor Polirubro", page_icon="⚡", layout="wide")
 
-# 1. PANTALLA DE SEGURIDAD DIRECTA
+# Inicializar memoria para las notificaciones en vivo
+if "lista_webhooks" not in st.session_state:
+    st.session_state["lista_webhooks"] = []
+
+# 1. SEGURIDAD
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
 
@@ -24,82 +28,68 @@ if not st.session_state["autenticado"]:
             st.error("Contraseña incorrecta")
     st.stop()
 
-# 2. PANEL EN VIVO AUTOMÁTICO
-st.title("⚡ Monitor de Transferencias por Alias / CVU")
+# 2. PANEL EN VIVO
+st.title("⚡ Monitor por Notificación Instantánea (Webhooks)")
 hora_actual = time.strftime("%H:%M:%S")
-st.caption(f"🔄 Modo ráfaga forzado activo • Controlando cada 2 segundos... [Último control: {hora_actual}]")
+st.caption(f"🔄 Esperando alertas en tiempo real de Mercado Pago... [Último control: {hora_actual}]")
 
-def consultar_sistema_comercial():
-    # Usamos el buscador general forzando parámetros de comercio abierto
-    url = "https://mercadopago.com"
-    headers = {
-        "Authorization": f"Bearer {TOKEN_MP}",
-        "X-Idempotency-Key": str(int(time.time()))
-    }
-    params = {
-        "sort": "date_created",
-        "criteria": "desc",
-        "limit": 10
-    }
-    try:
-        res = requests.get(url, headers=headers, params=params, timeout=2.0)
-        if res.status_code == 200:
-            datos = res.json().get("results", [])
-            lista_final = []
-            for pago in datos:
-                monto = float(pago.get("transaction_amount", 0))
-                # Capturamos cualquier ingreso aprobado
-                if pago.get("status") == "approved":
-                    f = pago.get("date_created", "")
-                    hora = f[11:16] if f else "--:--"
+# Capturar si Mercado Pago nos envía un aviso directo por los parámetros de la URL web
+query_params = st.query_params
+if "data.id" in query_params or "id" in query_params:
+    id_pago = query_params.get("data.id") or query_params.get("id")
+    
+    # Si recibimos un ID nuevo, consultamos sus detalles específicos a Mercado Pago de inmediato
+    if id_pago and id_pago not in [x.get("ID Operación") for x in st.session_state["lista_webhooks"]]:
+        url_pago = f"https://mercadopago.com{id_pago}"
+        headers = {"Authorization": f"Bearer {TOKEN_MP}"}
+        try:
+            res = requests.get(url_pago, headers=headers, timeout=2.0)
+            if res.status_code == 200:
+                pago_data = res.json()
+                if pago_data.get("status") == "approved":
+                    monto = float(pago_data.get("transaction_amount", 0))
+                    desc = pago_data.get("description") or "Transferencia por Alias / CVU"
                     
-                    detalle = pago.get("description") or "Transferencia Recibida"
-                    if "bank_transfer" in pago.get("operation_type", ""):
-                        detalle = "Transferencia por Alias / CVU"
-                        
-                    lista_final.append({
-                        "Hora": hora,
+                    # Guardamos la transferencia en la pantalla
+                    st.session_state["lista_webhooks"].insert(0, {
+                        "Hora": time.strftime("%H:%M"),
                         "Monto Recibido ($)": monto,
-                        "Origen / Tipo": detalle,
-                        "ID Operación": str(pago.get("id"))
+                        "Origen / Detalle": desc,
+                        "ID Operación": str(id_pago)
                     })
-            return pd.DataFrame(lista_final)
-        return pd.DataFrame()
-    except:
-        return pd.DataFrame()
+        except:
+            pass
 
-tabla_viva = consultar_sistema_comercial()
+# Convertir las alertas recibidas en tabla
+if st.session_state["lista_webhooks"]:
+    tabla_viva = pd.DataFrame(st.session_state["lista_webhooks"])
+else:
+    tabla_viva = pd.DataFrame(columns=["Hora", "Monto Recibido ($)", "Origen / Detalle", "ID Operación"])
 
-if tabla_viva.empty:
-    # Si sigue vacío por el bloqueo de permisos, simulamos la estructura para que veas que el reloj corre
-    tabla_viva = pd.DataFrame(columns=["Hora", "Monto Recibido ($)", "Origen / Tipo", "ID Operación"])
-
-# PANEL SUPERIOR
+# MOSTRAR MÉTRICAS
 col1, col2 = st.columns(2)
-
 if not tabla_viva.empty:
     ultima = tabla_viva.iloc[0]
     monto_ult = f"${ultima['Monto Recibido ($)']:,.2f}"
-    det_ult = f"{ultima['Hora']} - {ultima['Origen / Tipo']}"
+    det_ult = f"{ultima['Hora']} - {ultima['Origen / Detalle']}"
     total_acumulado = tabla_viva["Monto Recibido ($)"].sum()
 else:
     monto_ult = "$0.00"
-    det_ult = "Esperando ingreso..."
+    det_ult = "Esperando primera notificación..."
     total_acumulado = 0.0
 
 with col1:
-    st.metric(label="🚨 ÚLTIMA TRANSFERENCIA DETECTADA", value=monto_ult, delta=det_ult)
+    st.metric(label="🚨 ÚLTIMO INGRESO NOTIFICADO", value=monto_ult, delta=det_ult)
 with col2:
-    st.metric(label="💰 TOTAL RECIBIDO RECIENTE", value=f"${total_acumulado:,.2f}")
+    st.metric(label="💰 TOTAL ACUMULADO EN CAJA", value=f"${total_acumulado:,.2f}")
 
 st.markdown("---")
-st.subheader("📋 Registro de Transferencias Recientes")
-
+st.subheader("📋 Registro de Alertas en Tiempo Real")
 if not tabla_viva.empty:
     st.dataframe(tabla_viva, use_container_width=True, height=400)
 else:
-    st.warning("⚠️ Alerta de Permisos: Mercado Pago requiere producción activa. Esperando impacto de señal en vivo...")
+    st.info("Configurá la URL de esta página en tus Webhooks de Mercado Pago para empezar a recibir las transferencias automáticamente.")
 
-# Bucle de 2 segundos
+# Recarga corta de 2 segundos para chequear si entró algún parámetro nuevo por red
 time.sleep(2)
 st.rerun()
