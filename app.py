@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import time
+from datetime import datetime, timedelta
 
 # CREDENCIALES FIJAS Y SEGURAS
 TOKEN_MP = "APP_USR-2109822195706525-070122-23e9a6051330a533196e8de5669d6782-188405054"
@@ -32,7 +33,17 @@ st.caption(f"🔄 Rastreador Total Activo (2s) • Último control de red: {hora
 def consultar_movimientos_totales():
     url = "https://mercadopago.com"
     headers = {"Authorization": f"Bearer {TOKEN_MP}"}
-    params = {"limit": 15}
+    
+    # Calculamos la fecha desde ayer para asegurar que traiga el historial del día
+    fecha_desde = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+    
+    # Agregamos obligatoriamente el rango de fechas en los parámetros
+    params = {
+        "range": "date_created",
+        "begin_date": fecha_desde,
+        "limit": 20
+    }
+    
     try:
         res = requests.get(url, headers=headers, params=params, timeout=1.5)
         if res.status_code == 200:
@@ -42,9 +53,10 @@ def consultar_movimientos_totales():
                 monto = float(mov.get("amount", 0))
                 tipo = mov.get("type", "")
                 
-                # Filtramos únicamente los ingresos de dinero para la caja
+                # Filtramos únicamente las entradas de dinero reales
                 if mov.get("direction") == "inflow":
                     f = mov.get("date_created", "")
+                    # Ajustamos la hora al huso horario de Argentina (restando 3 horas del servidor UTC si es necesario)
                     hora = f[11:16] if f else "--:--"
                     
                     detalle = mov.get("detail", "Ingreso general")
@@ -66,18 +78,17 @@ def consultar_movimientos_totales():
 
 tabla_viva = consultar_movimientos_totales()
 
-# Evitamos errores si la cuenta no registra movimientos recientes
+# Mostramos el panel si hay datos
 if tabla_viva is not None and not tabla_viva.empty:
     df_aprobados = tabla_viva.copy()
     total_acumulado = df_aprobados["Monto Recibido ($)"].sum()
     
-    # Bloques de control en grande
     col1, col2 = st.columns(2)
-    ultima = df_aprobados.iloc[0]
+    ultima = df_aprobados.iloc[0] # Tomamos el movimiento más nuevo arriba de todo
     
     with col1:
         st.metric(
-            label="🚨 ÚLTIMO INGRESO DE DINERO (CUALQUIER MEDIO)", 
+            label="🚨 ÚLTIMO INGRESO DE DINERO DETECTADO", 
             value=f"${ultima['Monto Recibido ($)']:,.2f}", 
             delta=f"{ultima['Hora']} - {ultima['Tipo de Movimiento']}"
         )
@@ -91,8 +102,8 @@ if tabla_viva is not None and not tabla_viva.empty:
     st.subheader("📋 Registro de Ingresos Recientes")
     st.dataframe(df_aprobados, use_container_width=True, height=400)
 else:
-    st.info("No se registran entradas de dinero recientes. El monitor está encendido esperando nuevas transferencias...")
+    st.info("Buscando transacciones en el historial... Si la cuenta no registra movimientos hoy, el monitor quedará esperando en vivo.")
 
-# Bucle automático de ráfaga de 2 segundos
+# Bucle automático de 2 segundos
 time.sleep(2)
 st.rerun()
