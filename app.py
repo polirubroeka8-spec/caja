@@ -9,11 +9,29 @@ CLAVE_ACCESO = "polirubroeka1y2"
 
 st.set_page_config(page_title="Monitor Polirubro", page_icon="⚡", layout="wide")
 
+# ESTILOS VISUALES AVANZADOS
+st.markdown("""
+    <style>
+    .main { background-color: #f8fafc; }
+    div[data-testid="stMetric"] {
+        background-color: white;
+        padding: 20px;
+        border-radius: 16px;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        border-left: 6px solid #28c76f;
+    }
+    div[data-testid="stMetric"] label { font-size: 14px !important; font-weight: 700 !important; color: #64748b !important; }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 36px !important; font-weight: 800 !important; color: #1e293b !important; }
+    .title-caja { font-size: 32px !important; font-weight: 800; color: #0f172a; margin-bottom: 5px; }
+    </style>
+""", unsafe_html=True)
+
 # 1. PANTALLA DE SEGURIDAD DIRECTA
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
 
 if not st.session_state["autenticado"]:
+    st.markdown("<div style='max-width:400px; margin:80px auto; background:white; padding:30px; border-radius:16px; box-shadow:0 10px 15px -3px rgba(0,0,0,0.1); text-align:center;'>", unsafe_html=True)
     st.subheader("🔒 Panel Restringido - Polirubro")
     pass_input = st.text_input("Introduce la contraseña de la caja:", type="password", key="pass")
     if st.button("Ingresar al Panel", use_container_width=True):
@@ -22,112 +40,93 @@ if not st.session_state["autenticado"]:
             st.rerun()
         else:
             st.error("Contraseña incorrecta")
+    st.markdown("</div>", unsafe_html=True)
     st.stop()
 
-# 2. PANEL EN VIVO AUTOMÁTICO
-st.title("⚡ Monitor de Caja en Vivo")
+# 2. PANEL EN VIVO PROFESIONAL
+st.markdown("<h1 class='title-caja'>⚡ Monitor de Transferencias Recibidas</h1>", unsafe_html=True)
 hora_actual = time.strftime("%H:%M:%S")
-st.caption(f"🔄 Modo ráfaga activo • Controlando Mercado Pago cada 2 segundos... [Último control: {hora_actual}]")
+st.markdown(f"<p style='color:#64748b; font-size:14px; margin-top:-10px;'>🔄 Buscando transferencias por Alias/CVU cada 2 segundos • <b>Último control: {hora_actual}</b></p>", unsafe_html=True)
 
-def consultar_pagos_v1():
-    # Usamos el buscador general sin filtros de fecha estrictos para evitar rechazos del servidor
+def consultar_transferencias_alias():
+    # Usamos el endpoint de movimientos de cuenta (el único que ve transferencias bancarias de CBU/Alias)
     url = "https://mercadopago.com"
     headers = {"Authorization": f"Bearer {TOKEN_MP}"}
     
-    # Traemos los últimos 20 movimientos ordenados por creación decreciente
+    # Traemos los últimos 30 movimientos de la cuenta
     params = {
-        "sort": "date_created",
-        "criteria": "desc",
-        "limit": 20
+        "limit": 30
     }
     
     try:
         res = requests.get(url, headers=headers, params=params, timeout=2.0)
         if res.status_code == 200:
             datos = res.json().get("results", [])
-            lista = []
-            for pago in datos:
-                estado = pago.get("status", "")
-                
-                # Filtramos para mostrar únicamente ingresos aprobados o pendientes de tu caja
-                if estado in ["approved", "in_process"]:
-                    f = pago.get("date_created", "")
+            lista_transferencias = []
+            
+            for mov in datos:
+                # 'inflow' significa dinero que ENTRA a tu cuenta
+                if mov.get("direction") == "inflow":
+                    monto = float(mov.get("amount", 0))
+                    tipo = mov.get("type", "")
+                    
+                    # Formatear la hora
+                    f = mov.get("date_created", "")
                     hora = f[11:16] if f else "--:--"
                     
-                    # Intentamos extraer el nombre real del cliente o el tipo de transferencia
-                    cliente = pago.get("description")
-                    if not cliente:
-                        tarjeta_nombre = pago.get("card", {}).get("cardholder", {}).get("name")
-                        detalles_pago = pago.get("transaction_details", {})
-                        
-                        if tarjeta_nombre:
-                            cliente = tarjeta_nombre
-                        elif pago.get("payment_method_id") == "account_money":
-                            cliente = "Transferencia entre cuentas MP"
-                        elif "bank_transfer" in pago.get("operation_type", ""):
-                            cliente = "Transferencia bancaria / Alias"
-                        else:
-                            cliente = "Ingreso de dinero"
+                    # Identificar si es una transferencia de otro banco o de MP
+                    detalle = mov.get("detail", "Ingreso de dinero")
+                    if "bank_transfer" in tipo or "transfer" in tipo:
+                        detalle = "Transferencia por Alias / CVU"
+                    elif "mp_transfer" in tipo:
+                        detalle = "Envío desde otra cuenta MP"
                     
-                    monto = float(pago.get("transaction_amount", 0))
-                    neto = float(pago.get("transaction_details", {}).get("net_received_amount", 0))
-                    medio = pago.get("payment_method_id", "Otros").upper()
-                    
-                    lista.append({
+                    lista_transferencias.append({
                         "Hora": hora,
-                        "Monto ($)": monto,
-                        "Dinero Neto Real ($)": neto,
-                        "Cliente / Detalle": cliente,
-                        "Medio de Pago": medio,
-                        "Estado": estado.upper()
+                        "Monto Recibido ($)": monto,
+                        "Origen / Tipo": detalle,
+                        "ID Operación": str(mov.get("id"))
                     })
-            return pd.DataFrame(lista)
+            return pd.DataFrame(lista_transferencias)
         return pd.DataFrame()
     except:
         return pd.DataFrame()
 
-tabla_viva = consultar_pagos_v1()
+tabla_viva = consultar_transferencias_alias()
 
-# Si la tabla viene vacía, armamos estructura limpia para evitar errores en pantalla
+# Si la tabla viene vacía, armamos estructura limpia
 if tabla_viva.empty:
-    tabla_viva = pd.DataFrame(columns=["Hora", "Monto ($)", "Dinero Neto Real ($)", "Cliente / Detalle", "Medio de Pago", "Estado"])
+    tabla_viva = pd.DataFrame(columns=["Hora", "Monto Recibido ($)", "Origen / Tipo", "ID Operación"])
 
-df_aprobados = tabla_viva[tabla_viva["Estado"] == "APPROVED"]
-
-# Bloques de métricas gigantes en pantalla
-col1, col2, col3 = st.columns(3)
+# PANEL SUPERIOR
+col1, col2 = st.columns(2)
 
 if not tabla_viva.empty:
-    ultima = tabla_viva.iloc[0] # Tomamos la fila de arriba de todo (la más reciente)
-    monto_ult = f"${ultima['Monto ($)']:,.2f}"
-    det_ult = f"{ultima['Hora']} - {ultima['Cliente / Detalle'][:15]}"
+    ultima = tabla_viva.iloc[0] # Tomamos la fila más nueva (arriba de todo)
+    monto_ult = f"${ultima['Monto Recibido ($)']:,.2f}"
+    det_ult = f"{ultima['Hora']} - {ultima['Origen / Tipo']}"
+    total_acumulado = tabla_viva["Monto Recibido ($)"].sum()
 else:
     monto_ult = "$0.00"
-    det_ult = "Esperando nueva transferencia..."
+    det_ult = "Esperando transferencia por Alias..."
+    total_acumulado = 0.0
 
 with col1:
-    st.metric(label="🚨 ÚLTIMO INGRESO DETECTADO", value=monto_ult, delta=det_ult)
+    st.metric(label="🚨 ÚLTIMA TRANSFERENCIA DETECTADA", value=monto_ult, delta=det_ult)
 with col2:
-    st.metric(label="💰 TOTAL BRUTO RECIENTE", value=f"${df_aprobados['Monto ($)'].sum():,.2f}")
-with col3:
-    st.metric(label="🏦 DINERO NETO EN CUENTA", value=f"${df_aprobados['Dinero Neto Real ($)'].sum():,.2f}")
+    st.metric(label="💰 TOTAL RECIBIDO RECIENTE", value=f"${total_acumulado:,.2f}")
 
-st.markdown("---")
-st.subheader("📋 Registro de Operaciones Recientes")
+st.markdown("<br>", unsafe_html=True)
+st.subheader("📋 Registro de Transferencias de Hoy")
 
 if not tabla_viva.empty:
-    # Función para pintar las celdas y ver rápido los estados
-    def colorear_estados(val):
-        if val == "APPROVED": return "background-color: #d4edda; color: #155724; font-weight: bold;"
-        return "background-color: #fff3cd; color: #856404;"
-        
     st.dataframe(
-        tabla_viva.style.map(colorear_estados, subset=["Estado"]), 
-        use_container_width=True, 
+        tabla_viva,
+        use_container_width=True,
         height=400
     )
 else:
-    st.info("El monitor está activo y conectado. Esperando a que ingrese la primera transferencia en vivo...")
+    st.info("No se registran transferencias por Alias en las últimas horas. El monitor está activo esperando ingresos...")
 
 # Bucle automático de ráfaga de 2 segundos
 time.sleep(2)
