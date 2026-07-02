@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import pandas as pd
 import time
-from datetime import datetime, timedelta
 
 # CREDENCIALES FIJAS Y SEGURAS
 TOKEN_MP = "APP_USR-2109822195706525-070122-23e9a6051330a533196e8de5669d6782-188405054"
@@ -28,82 +27,108 @@ if not st.session_state["autenticado"]:
 # 2. PANEL EN VIVO AUTOMÁTICO
 st.title("⚡ Monitor de Caja en Vivo")
 hora_actual = time.strftime("%H:%M:%S")
-st.caption(f"🔄 Rastreador Total Activo (2s) • Último control de red: {hora_actual}")
+st.caption(f"🔄 Modo ráfaga activo • Controlando Mercado Pago cada 2 segundos... [Último control: {hora_actual}]")
 
-def consultar_movimientos_totales():
+def consultar_pagos_v1():
+    # Usamos el buscador general sin filtros de fecha estrictos para evitar rechazos del servidor
     url = "https://mercadopago.com"
     headers = {"Authorization": f"Bearer {TOKEN_MP}"}
     
-    # Calculamos la fecha desde ayer para asegurar que traiga el historial del día
-    fecha_desde = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
-    
-    # Agregamos obligatoriamente el rango de fechas en los parámetros
+    # Traemos los últimos 20 movimientos ordenados por creación decreciente
     params = {
-        "range": "date_created",
-        "begin_date": fecha_desde,
+        "sort": "date_created",
+        "criteria": "desc",
         "limit": 20
     }
     
     try:
-        res = requests.get(url, headers=headers, params=params, timeout=1.5)
+        res = requests.get(url, headers=headers, params=params, timeout=2.0)
         if res.status_code == 200:
             datos = res.json().get("results", [])
             lista = []
-            for mov in datos:
-                monto = float(mov.get("amount", 0))
-                tipo = mov.get("type", "")
+            for pago in datos:
+                estado = pago.get("status", "")
                 
-                # Filtramos únicamente las entradas de dinero reales
-                if mov.get("direction") == "inflow":
-                    f = mov.get("date_created", "")
-                    # Ajustamos la hora al huso horario de Argentina (restando 3 horas del servidor UTC si es necesario)
+                # Filtramos para mostrar únicamente ingresos aprobados o pendientes de tu caja
+                if estado in ["approved", "in_process"]:
+                    f = pago.get("date_created", "")
                     hora = f[11:16] if f else "--:--"
                     
-                    detalle = mov.get("detail", "Ingreso general")
-                    if "regular_payment" in tipo: 
-                        detalle = "Venta / Cobro Directo"
-                    elif "bank_transfer" in tipo: 
-                        detalle = "Transferencia por Alias / CVU"
+                    # Intentamos extraer el nombre real del cliente o el tipo de transferencia
+                    cliente = pago.get("description")
+                    if not cliente:
+                        tarjeta_nombre = pago.get("card", {}).get("cardholder", {}).get("name")
+                        detalles_pago = pago.get("transaction_details", {})
+                        
+                        if tarjeta_nombre:
+                            cliente = tarjeta_nombre
+                        elif pago.get("payment_method_id") == "account_money":
+                            cliente = "Transferencia entre cuentas MP"
+                        elif "bank_transfer" in pago.get("operation_type", ""):
+                            cliente = "Transferencia bancaria / Alias"
+                        else:
+                            cliente = "Ingreso de dinero"
+                    
+                    monto = float(pago.get("transaction_amount", 0))
+                    neto = float(pago.get("transaction_details", {}).get("net_received_amount", 0))
+                    medio = pago.get("payment_method_id", "Otros").upper()
                     
                     lista.append({
                         "Hora": hora,
-                        "Monto Recibido ($)": monto,
-                        "Tipo de Movimiento": detalle,
-                        "ID Operación": str(mov.get("id"))
+                        "Monto ($)": monto,
+                        "Dinero Neto Real ($)": neto,
+                        "Cliente / Detalle": cliente,
+                        "Medio de Pago": medio,
+                        "Estado": estado.upper()
                     })
             return pd.DataFrame(lista)
         return pd.DataFrame()
     except:
         return pd.DataFrame()
 
-tabla_viva = consultar_movimientos_totales()
+tabla_viva = consultar_pagos_v1()
 
-# Mostramos el panel si hay datos
-if tabla_viva is not None and not tabla_viva.empty:
-    df_aprobados = tabla_viva.copy()
-    total_acumulado = df_aprobados["Monto Recibido ($)"].sum()
-    
-    col1, col2 = st.columns(2)
-    ultima = df_aprobados.iloc[0] # Tomamos el movimiento más nuevo arriba de todo
-    
-    with col1:
-        st.metric(
-            label="🚨 ÚLTIMO INGRESO DE DINERO DETECTADO", 
-            value=f"${ultima['Monto Recibido ($)']:,.2f}", 
-            delta=f"{ultima['Hora']} - {ultima['Tipo de Movimiento']}"
-        )
-    with col2:
-        st.metric(
-            label="💰 TOTAL ACUMULADO EN PANTALLA", 
-            value=f"${total_acumulado:,.2f}"
-        )
+# Si la tabla viene vacía, armamos estructura limpia para evitar errores en pantalla
+if tabla_viva.empty:
+    tabla_viva = pd.DataFrame(columns=["Hora", "Monto ($)", "Dinero Neto Real ($)", "Cliente / Detalle", "Medio de Pago", "Estado"])
 
-    st.markdown("---")
-    st.subheader("📋 Registro de Ingresos Recientes")
-    st.dataframe(df_aprobados, use_container_width=True, height=400)
+df_aprobados = tabla_viva[tabla_viva["Estado"] == "APPROVED"]
+
+# Bloques de métricas gigantes en pantalla
+col1, col2, col3 = st.columns(3)
+
+if not tabla_viva.empty:
+    ultima = tabla_viva.iloc[0] # Tomamos la fila de arriba de todo (la más reciente)
+    monto_ult = f"${ultima['Monto ($)']:,.2f}"
+    det_ult = f"{ultima['Hora']} - {ultima['Cliente / Detalle'][:15]}"
 else:
-    st.info("Buscando transacciones en el historial... Si la cuenta no registra movimientos hoy, el monitor quedará esperando en vivo.")
+    monto_ult = "$0.00"
+    det_ult = "Esperando nueva transferencia..."
 
-# Bucle automático de 2 segundos
+with col1:
+    st.metric(label="🚨 ÚLTIMO INGRESO DETECTADO", value=monto_ult, delta=det_ult)
+with col2:
+    st.metric(label="💰 TOTAL BRUTO RECIENTE", value=f"${df_aprobados['Monto ($)'].sum():,.2f}")
+with col3:
+    st.metric(label="🏦 DINERO NETO EN CUENTA", value=f"${df_aprobados['Dinero Neto Real ($)'].sum():,.2f}")
+
+st.markdown("---")
+st.subheader("📋 Registro de Operaciones Recientes")
+
+if not tabla_viva.empty:
+    # Función para pintar las celdas y ver rápido los estados
+    def colorear_estados(val):
+        if val == "APPROVED": return "background-color: #d4edda; color: #155724; font-weight: bold;"
+        return "background-color: #fff3cd; color: #856404;"
+        
+    st.dataframe(
+        tabla_viva.style.map(colorear_estados, subset=["Estado"]), 
+        use_container_width=True, 
+        height=400
+    )
+else:
+    st.info("El monitor está activo y conectado. Esperando a que ingrese la primera transferencia en vivo...")
+
+# Bucle automático de ráfaga de 2 segundos
 time.sleep(2)
 st.rerun()
