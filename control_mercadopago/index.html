@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor MP Seguro - Polirubro</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f6f9; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; display: none; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        h1 { margin: 0; color: #111; font-size: 24px; }
+        .contador { font-size: 14px; color: #666; background: #fff; padding: 8px 12px; border-radius: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        
+        /* PANTALLA DE ACCESO */
+        .login-box { max-width: 400px; margin: 100px auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; }
+        .login-box h2 { margin-top: 0; color: #111; }
+        .login-box input { width: 90%; padding: 12px; margin: 15px 0; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; text-align: center; }
+        .login-box button { background-color: #009ee3; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; width: 95%; }
+        .login-box button:hover { background-color: #007bb4; }
+        
+        /* DASHBOARD */
+        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-left: 5px solid #009ee3; }
+        .card.ultimo { border-left-color: #ff9f43; }
+        .card.neto { border-left-color: #28c76f; }
+        .card-title { font-size: 12px; text-transform: uppercase; color: #777; font-weight: bold; margin-bottom: 5px; }
+        .card-value { font-size: 28px; font-weight: bold; color: #222; }
+        .card-sub { font-size: 13px; color: #555; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .btn-manual { background-color: #009ee3; color: white; border: none; padding: 10px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 14px; }
+        .table-container { background: white; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); overflow: hidden; }
+        table { width: 100%; border-collapse: collapse; text-align: left; }
+        th, td { padding: 14px 16px; border-bottom: 1px solid #eee; }
+        th { background-color: #fafafa; font-weight: 600; color: #555; }
+        tr:hover { background-color: #f9f9f9; }
+        .status { padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; display: inline-block; }
+        .status.approved { background-color: #d4edda; color: #155724; }
+        .status.in_process { background-color: #fff3cd; color: #856404; }
+        .status.rejected { background-color: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+
+    <!-- PANTALLA DE LOGUEO -->
+    <div class="login-box" id="bloque-login">
+        <h2>🔒 Panel Restringido</h2>
+        <p>Introduce la contraseña de la caja para iniciar el monitor en vivo.</p>
+        <input type="password" id="pass-input" placeholder="Contraseña de la caja" onkeypress="if(event.key === 'Enter') verificarAcceso()">
+        <button onclick="verificarAcceso()">Ingresar al Panel</button>
+        <p id="error-txt" style="color: red; display: none; margin-top: 10px; font-weight: bold;">Contraseña incorrecta</p>
+    </div>
+
+    <!-- PANEL EN VIVO -->
+    <div class="container" id="bloque-dashboard">
+        <header>
+            <div>
+                <h1>⚡ Monitor de Transferencias Seguro</h1>
+                <p style="margin: 5px 0 0 0; color: #777;">Control en vivo automatizado cada 2 segundos</p>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <div class="contador" id="clock-info">Sincronizando...</div>
+                <button class="btn-manual" onclick="forzarActualizacion()">🚀 Forzar Ahora</button>
+            </div>
+        </header>
+
+        <div class="metrics-grid">
+            <div class="card ultimo">
+                <div class="card-title">🚨 Último Ingreso Detectado</div>
+                <div class="card-value" id="m-ultimo-monto">$0.00</div>
+                <div class="card-sub" id="m-ultimo-detalle">Buscando operaciones...</div>
+            </div>
+            <div class="card">
+                <div class="card-title">💰 Total Bruto Reciente</div>
+                <div class="card-value" id="m-total-bruto">$0.00</div>
+                <div class="card-sub">Suma de aprobados en pantalla</div>
+            </div>
+            <div class="card neto">
+                <div class="card-title">🏦 Total Neto Recibido</div>
+                <div class="card-value" id="m-total-neto">$0.00</div>
+                <div class="card-sub">Dinero real neto líquido</div>
+            </div>
+        </div>
+
+        <h2>📋 Historial en Tiempo Real</h2>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Hora</th>
+                        <th>Cliente / Detalle</th>
+                        <th>Monto Bruto</th>
+                        <th>Dinero Neto</th>
+                        <th>Medio</th>
+                        <th>Estado</th>
+                    </tr>
+                </thead>
+                <tbody id="tabla-cuerpo"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Tu llave de Mercado Pago cifrada de forma segura con tu contraseña
+        const CADENA_CIFRADA = "313936270a040b2d35363f3f6e656d603a3d3c33606263672e3839336765662d3536342c3061616436353d3731676662363e3d2a36373b64606766623630652d67383637316462613133342a3461626436323c3731676663373c382b613937643564616631623930376267676767666131333428343765";
+        let tokenValido = "";
+
+        function verificarAcceso() {
+            const pass = document.getElementById('pass-input').value;
+            let des = "";
+            try {
+                // Algoritmo de descifrado directo por hardware
+                for (let i = 0; i < CADENA_CIFRADA.length; i += 2) {
+                    let hex = CADENA_CIFRADA.substring(i, i + 2);
+                    let chr = parseInt(hex, 16);
+                    let keyChar = pass.charCodeAt((i / 2) % pass.length);
+                    des += String.fromCharCode(chr ^ keyChar);
+                }
+                
+                if (des.startsWith("APP_USR")) {
+                    tokenValido = des;
+                    document.getElementById('bloque-login').style.display = 'none';
+                    document.getElementById('bloque-dashboard').style.display = 'block';
+                    
+                    consultarMercadoPago();
+                    setInterval(consultarMercadoPago, 2000); // MODO RÁFAGA AUTOMÁTICO
+                } else { mostrarError(); }
+            } catch (e) { mostrarError(); }
+        }
+
+        function mostrarError() {
+            document.getElementById('error-txt').style.display = 'block';
+            document.getElementById('pass-input').value = '';
+        }
+
+        async function consultarMercadoPago() {
+            const url = "https://mercadopago.com";
+            try {
+                const respuesta = await fetch(url, { headers: { 'Authorization': `Bearer ${tokenValido}` } });
+                if (respuesta.status === 200) {
+                    const datos = await respuesta.json();
+                    mostrarDatos(datos.results);
+                } else if (respuesta.status === 429) {
+                    document.getElementById('clock-info').innerText = "⚠️ Modo ráfaga pausado por MP...";
+                }
+            } catch (error) { document.getElementById('clock-info').innerText = "❌ Error de Conexión"; }
+        }
+
+        function mostrarDatos(pagos) {
+            if (!pagos || pagos.length === 0) return;
+            const cuerpoTabla = document.getElementById('tabla-cuerpo');
+            cuerpoTabla.innerHTML = '';
+            let totalBruto = 0, totalNeto = 0;
+
+            pagos.forEach((pago, index) => {
+                const hora = (pago.date_created || "").substring(11, 16) || "--:--";
+                let cliente = pago.description || (pago.card && pago.card.cardholder && pago.card.cardholder.name) || "Transferencia Recibida";
+                const monto = parseFloat(pago.transaction_amount || 0);
+                const neto = parseFloat(pago.transaction_details ? pago.transaction_details.net_received_amount : 0 || 0);
+                const medio = (pago.payment_method_id || "Otros").toUpperCase();
+                const estado = pago.status || "unknown";
+
+                if (estado === 'approved') { totalBruto += monto; totalNeto += neto; }
+
+                if (index === 0) {
+                    document.getElementById('m-ultimo-monto').innerText = `$${monto.toLocaleString('es-AR')}`;
+                    document.getElementById('m-ultimo-detalle').innerText = `${hora} - ${cliente.substring(0, 18)} (${estado==='approved'?'✅':'⏳'})`;
+                }
+
+                let clse = estado === 'approved' ? 'approved' : (estado === 'in_process' ? 'in_process' : 'rejected');
+                let txt = estado === 'approved' ? 'APROBADO' : (estado === 'in_process' ? 'PENDIENTE' : 'RECHAZADO');
+
+                cuerpoTabla.innerHTML += `
+                    <tr>
+                        <td><b>${hora}</b></td>
+                        <td>${cliente}</td>
+                        <td>$${monto.toLocaleString('es-AR')}</td>
+                        <td style="color: #28c76f;">$${neto.toLocaleString('es-AR')}</td>
+                        <td><small>${medio}</small></td>
+                        <td><span class="status ${clse}">${txt}</span></td>
